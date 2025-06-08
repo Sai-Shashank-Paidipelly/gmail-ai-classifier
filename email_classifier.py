@@ -11,14 +11,9 @@ EMAIL = os.getenv("EMAIL_ADDRESS")
 PASSWORD = os.getenv("EMAIL_PASSWORD")
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Debug: Environment check
-print("Environment variables check:")
-print(f"Email address loaded: {'Yes' if EMAIL else 'No'}")
-print(f"Password loaded: {'Yes' if PASSWORD else 'No'}")
-print(f"OpenAI key loaded: {'Yes' if openai.api_key else 'No'}")
 
 # Connect to Gmail via IMAP and fetch emails
-def fetch_emails(max_emails=10):
+def fetch_emails(max_emails=5):
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
@@ -69,16 +64,4 @@ def classify_email(subject, snippet):
     )
     return response.choices[0].message.content.strip()
 
-# Main runner
-def main():
-    emails = fetch_emails(10)
-    for i, mail in enumerate(emails):
-        label = classify_email(mail['subject'], mail['snippet'])
-        print(f"\n📧 Email #{i+1}")
-        print(f"From   : {mail['from']}")
-        print(f"Subject: {mail['subject']}")
-        print(f"Label  : {label}")
-        print("-" * 40)
 
-if __name__ == "__main__":
-    main()
