@@ -32,7 +32,7 @@ def main():
     messages = (
         service.users()
         .messages()
-        .list(userId="me", labelIds=["INBOX"], maxResults=5)
+        .list(userId="me", q="category:primary", maxResults=15)
         .execute()
         .get("messages", [])
     )

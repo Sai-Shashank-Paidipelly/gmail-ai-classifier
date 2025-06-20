@@ -4,3 +4,8 @@ python-dotenv
 imapclient
 pandas
 black
+flask
+flask-cors
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib

@@ -4,6 +4,7 @@ import email
 from dotenv import load_dotenv
 from imapclient import IMAPClient
 import openai
+import traceback
 
 # Load environment variables
 load_dotenv()
@@ -13,59 +14,71 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 # Connect to Gmail via IMAP and fetch emails
-def fetch_emails(max_emails=100):
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
+def fetch_emails(max_emails=15):
+    try:
+        print(f"Connecting to Gmail with email: {EMAIL}")
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
 
-    with IMAPClient("imap.gmail.com", ssl_context=ssl_context) as client:
-        client.login(EMAIL, PASSWORD)
-        client.select_folder("INBOX", readonly=True)
+        with IMAPClient("imap.gmail.com", ssl_context=ssl_context) as client:
+            print("Attempting to login...")
+            client.login(EMAIL, PASSWORD)
+            print("Login successful")
 
-        messages = client.search(["NOT", "DELETED"])
-        latest = messages[-max_emails:]
+            client.select_folder("INBOX", readonly=True)
+            print("Selected INBOX folder")
 
-        email_data = []
+            messages = client.search(["NOT", "DELETED"])
+            print(f"Found {len(messages)} messages")
+            latest = messages[-max_emails:] if messages else []
+            print(f"Processing {len(latest)} messages")
 
-        for uid in reversed(latest):
-            raw_message = client.fetch([uid], ["RFC822"])[uid][b"RFC822"]
-            msg = email.message_from_bytes(raw_message)
-            subject = msg["subject"]
-            from_ = msg["from"]
-            snippet = ""
+            email_data = []
 
-            if msg.is_multipart():
-                for part in msg.walk():
-                    if part.get_content_type() == "text/plain":
-                        payload = part.get_payload(decode=True)
-                        if payload:
-                            snippet = payload.decode(errors="ignore")[:300]
-                            break
+            for uid in reversed(latest):
+                raw_message = client.fetch([uid], ["RFC822"])[uid][b"RFC822"]
+                msg = email.message_from_bytes(raw_message)
+                subject = msg["subject"]
+                from_ = msg["from"]
+                snippet = ""
 
-                # Fallback if no plain text was found
-                if not snippet:
+                if msg.is_multipart():
                     for part in msg.walk():
-                        if part.get_content_type() == "text/html":
+                        if part.get_content_type() == "text/plain":
                             payload = part.get_payload(decode=True)
                             if payload:
                                 snippet = payload.decode(errors="ignore")[:300]
                                 break
-            else:
-                payload = msg.get_payload(decode=True)
-                if payload:
-                    snippet = payload.decode(errors="ignore")[:300]
+
+                    # Fallback if no plain text was found
+                    if not snippet:
+                        for part in msg.walk():
+                            if part.get_content_type() == "text/html":
+                                payload = part.get_payload(decode=True)
+                                if payload:
+                                    snippet = payload.decode(errors="ignore")[:300]
+                                    break
                 else:
-                    snippet = ""
+                    payload = msg.get_payload(decode=True)
+                    if payload:
+                        snippet = payload.decode(errors="ignore")[:300]
+                    else:
+                        snippet = ""
 
-            email_data.append(
-                {
-                    "subject": subject,
-                    "from": from_,
-                    "snippet": snippet,
-                }
-            )
+                email_data.append(
+                    {
+                        "subject": subject,
+                        "from": from_,
+                        "snippet": snippet,
+                    }
+                )
 
-        return email_data
+            return email_data
+    except Exception as e:
+        print(f"Error in fetch_emails: {str(e)}")
+        print(traceback.format_exc())
+        raise Exception(f"Failed to fetch emails: {str(e)}")
 
 
 # Classify email with OpenAI
