@@ -1,0 +1,28 @@
+You are an AI email assistant. Based on the subject and body of the email, classify the email into one of the following categories:
+
+Categories:
+- Sports
+- Entertainment
+- Job Applications
+- Conferences
+- Promotions
+- Work
+- Other
+
+Examples:
+1. "ESPN Weekly Highlights" → Sports
+2. "AMC Movie Times" → Entertainment
+3. "Application for Software Engineer Role" → Job Applications
+4. "Invitation: AI Research Conference 2024" → Conferences
+5. "30% Off New Headphones!" → Promotions
+6. "Project deadline and updates" → Work
+7. "Data Analyst Skills that matter in 2025" → Promotions
+8. "Practice coding with interviews" → Promotions
+9. "Can you solve this problem?" → Promotions
+
+Classify the following:
+
+Subject: {{ subject }}
+Body: {{ snippet }}
+
+Return only the category name.
