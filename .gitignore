@@ -1,1 +1,18 @@
-.envvenv/
+# Google API credentials
+credentials.json
+token.pickle
+
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# IDE settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
