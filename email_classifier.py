@@ -1,10 +1,13 @@
 import os
 import ssl
 import email
+import re
 from dotenv import load_dotenv
 from imapclient import IMAPClient
 import openai
 import traceback
+from jinja2 import Template
+from gmail_service import get_gmail_service
 
 # Load environment variables
 load_dotenv()
@@ -13,107 +16,140 @@ PASSWORD = os.getenv("EMAIL_PASSWORD")
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
-# Connect to Gmail via IMAP and fetch emails
+def get_categories_from_prompt():
+    """Extract categories from the email_classifier_prompt.txt file"""
+    try:
+        with open("email_classifier_prompt.txt", "r") as file:
+            content = file.read()
+            # Look for the Categories section and extract the categories
+            categories_match = re.search(r"Categories:\s*\n((?:- .*\n)+)", content)
+            if categories_match:
+                categories_section = categories_match.group(1)
+                # Extract each category (removing the "- " prefix)
+                categories = [
+                    line.strip()[2:]
+                    for line in categories_section.split("\n")
+                    if line.strip().startswith("- ")
+                ]
+                return categories
+            return []
+    except Exception as e:
+        print(f"[ERROR] Failed to read categories from prompt file: {e}")
+        return []
+
+
 def fetch_emails(max_emails=15):
     try:
-        print(f"Connecting to Gmail with email: {EMAIL}")
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
+        service = get_gmail_service()
 
-        with IMAPClient("imap.gmail.com", ssl_context=ssl_context) as client:
-            print("Attempting to login...")
-            client.login(EMAIL, PASSWORD)
-            print("Login successful")
+        # Get categories dynamically from the prompt file
+        categories = get_categories_from_prompt()
+        print(f"Looking for emails not categorized with: {categories}")
 
-            client.select_folder("INBOX", readonly=True)
-            print("Selected INBOX folder")
+        # First, get all available labels to see their actual IDs
+        labels_response = service.users().labels().list(userId="me").execute()
+        all_labels = labels_response.get("labels", [])
 
-            messages = client.search(["NOT", "DELETED"])
-            print(f"Found {len(messages)} messages")
-            latest = messages[-max_emails:] if messages else []
-            print(f"Processing {len(latest)} messages")
+        # Print all labels for debugging
+        print("Available labels in Gmail:")
+        for label in all_labels:
+            print(f"  - {label['name']} (ID: {label['id']})")
 
-            email_data = []
+        # Map our category names to actual label IDs
+        category_label_ids = []
+        for category in categories:
+            for label in all_labels:
+                if category.lower() == label["name"].lower():
+                    category_label_ids.append(label["id"])
 
-            for uid in reversed(latest):
-                raw_message = client.fetch([uid], ["RFC822"])[uid][b"RFC822"]
-                msg = email.message_from_bytes(raw_message)
-                subject = msg["subject"]
-                from_ = msg["from"]
-                snippet = ""
+        print(f"Category label IDs to exclude: {category_label_ids}")
 
-                if msg.is_multipart():
-                    for part in msg.walk():
-                        if part.get_content_type() == "text/plain":
-                            payload = part.get_payload(decode=True)
-                            if payload:
-                                snippet = payload.decode(errors="ignore")[:300]
-                                break
+        # Fetch messages from the Primary category
+        response = (
+            service.users()
+            .messages()
+            .list(
+                userId="me",
+                q="category:primary",
+                maxResults=max_emails * 2,  # Fetch more to account for filtering
+            )
+            .execute()
+        )
 
-                    # Fallback if no plain text was found
-                    if not snippet:
-                        for part in msg.walk():
-                            if part.get_content_type() == "text/html":
-                                payload = part.get_payload(decode=True)
-                                if payload:
-                                    snippet = payload.decode(errors="ignore")[:300]
-                                    break
-                else:
-                    payload = msg.get_payload(decode=True)
-                    if payload:
-                        snippet = payload.decode(errors="ignore")[:300]
-                    else:
-                        snippet = ""
+        messages = response.get("messages", [])
+        print(f"Found {len(messages)} messages in primary category")
+        email_data = []
+        skipped_count = 0
 
-                email_data.append(
-                    {
-                        "subject": subject,
-                        "from": from_,
-                        "snippet": snippet,
-                    }
-                )
+        for message in messages:
+            if len(email_data) >= max_emails:
+                break
 
-            return email_data
+            msg_id = message["id"]
+
+            # Get full message details
+            msg = (
+                service.users()
+                .messages()
+                .get(userId="me", id=msg_id, format="full")
+                .execute()
+            )
+
+            # Check if the email has any of our category labels
+            msg_labels = msg.get("labelIds", [])
+            print(f"Email ID {msg_id} has labels: {msg_labels}")
+
+            # Skip if the email has any of our category labels
+            if any(label_id in msg_labels for label_id in category_label_ids):
+                print(f"Skipping email with ID {msg_id} - already categorized")
+                skipped_count += 1
+                continue
+
+            headers = msg["payload"]["headers"]
+            subject = next(
+                (h["value"] for h in headers if h["name"].lower() == "subject"),
+                "(No Subject)",
+            )
+            sender = next(
+                (h["value"] for h in headers if h["name"].lower() == "from"),
+                "(No Sender)",
+            )
+            snippet = msg.get("snippet", "")
+
+            email_data.append(
+                {
+                    "id": msg_id,
+                    "subject": subject,
+                    "from": sender,
+                    "snippet": snippet,
+                }
+            )
+
+        print(
+            f"Processed {len(email_data)} emails, skipped {skipped_count} already categorized emails"
+        )
+        return email_data
+
     except Exception as e:
-        print(f"Error in fetch_emails: {str(e)}")
-        print(traceback.format_exc())
-        raise Exception(f"Failed to fetch emails: {str(e)}")
+        print(f"[ERROR] Failed to fetch emails via Gmail API: {e}")
+        traceback.print_exc()  # Print full traceback for debugging
+        return []
 
 
 # Classify email with OpenAI
 def classify_email(subject, snippet):
-    prompt = f"""
-You are an AI email assistant. Based on the subject and body of the email, classify the email into one of the following categories:
+    try:
+        # Load and render prompt
+        with open("email_classifier_prompt.txt", "r") as file:
+            template = Template(file.read())
+            prompt = template.render(subject=subject, snippet=snippet)
 
-Categories:
-- Sports
-- Entertainment
-- Job Applications
-- Conferences
-- Promotions
-- Work
-- Other
-
-Examples:
-1. "ESPN Weekly Highlights" → Sports
-2. "AMC Movie Times" → Entertainment
-3. "Application for Software Engineer Role" → Job Applications
-4. "Invitation: AI Research Conference 2024" → Conferences
-5. "30% Off New Headphones!" → Promotions
-6. "Project deadline and updates" → Work
-8. "Data Analyst Skills that matter in 2025" → Promotions
-9. "Practice coding with interviews" →  Promotions
-10. "Can you solve this problem?" →  Promotions
-
-Classify the following:
-
-Subject: {subject}
-Body: {snippet}
-
-Return only the category name.
-"""
-    response = openai.chat.completions.create(
-        model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt.strip()}]
-    )
-    return response.choices[0].message.content.strip()
+        # Send to OpenAI
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt.strip()}],
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"[ERROR] Failed to classify email: {e}")
+        return "Other"
