@@ -11,8 +11,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.pyc
 
 # Credentials and tokens
+credentials.json
 Credentials.json
 token.pickle
 *.json

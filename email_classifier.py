@@ -13,7 +13,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 # Connect to Gmail via IMAP and fetch emails
-def fetch_emails(max_emails=5):
+def fetch_emails(max_emails=100):
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
