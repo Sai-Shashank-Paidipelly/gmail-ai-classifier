@@ -5,6 +5,7 @@ import email.header
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
+
 def convert_csv_to_excel(csv_file_path, excel_file_path="cleaned_email_data.xlsx"):
     # Load raw CSV
     df = pd.read_csv(csv_file_path)
@@ -23,16 +24,20 @@ def convert_csv_to_excel(csv_file_path, excel_file_path="cleaned_email_data.xlsx
 
     # Clean whitespaces and truncate long snippets
     df["Snippet"] = df["Snippet"].fillna("").apply(lambda x: " ".join(str(x).split()))
-    df["Snippet"] = df["Snippet"].apply(lambda x: x[:150] + "..." if len(x) > 150 else x)
+    df["Snippet"] = df["Snippet"].apply(
+        lambda x: x[:150] + "..." if len(x) > 150 else x
+    )
 
     # Rename columns for presentation
-    df = df.rename(columns={
-        "Subject": "Email Subject",
-        "From": "Sender",
-        "Snippet": "Email Snippet",
-        "AI_Category": "Predicted Category",
-        "User_Category": "User Category"
-    })
+    df = df.rename(
+        columns={
+            "Subject": "Email Subject",
+            "From": "Sender",
+            "Snippet": "Email Snippet",
+            "AI_Category": "Predicted Category",
+            "User_Category": "User Category",
+        }
+    )
 
     # Save cleaned version to Excel
     df.to_excel(excel_file_path, index=False)

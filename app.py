@@ -7,7 +7,7 @@ st.set_page_config(page_title="📧 AI Email Classifier", layout="wide")
 st.title("📧 AI Email Classifier with Manual Override")
 
 # Load emails
-emails = fetch_emails(15)
+emails = fetch_emails(5)
 feedback_data = []
 
 # UI for each email

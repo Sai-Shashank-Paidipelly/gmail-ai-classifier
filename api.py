@@ -1,27 +1,18 @@
 from flask import Flask, jsonify, request
 import os
-from email_classifier import fetch_emails, classify_email
+from email_classifier import classify_email
 from gmail_service import get_gmail_service
 from flask_cors import CORS
+from label_emails import fetch_primary_emails, get_or_create_label
+from email_classifier import get_categories_from_prompt
+from dotenv import load_dotenv
+import traceback
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
-
-
-@app.route("/api/emails", methods=["GET"])
-def get_emails():
-    try:
-        # Get max_emails parameter from query string, default to 5
-        max_emails = request.args.get("max_emails", default=5, type=int)
-        emails = fetch_emails(max_emails)
-
-        # Add classification to each email
-        for email in emails:
-            email["category"] = classify_email(email["subject"], email["snippet"])
-
-        return jsonify({"success": True, "emails": emails})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/api/primary-emails", methods=["GET"])
@@ -151,5 +142,184 @@ def label_email():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/emails/primary", methods=["GET"])
+def get_primary_emails_api():
+    """API endpoint to fetch primary emails that haven't been categorized yet"""
+    try:
+        # Get query parameters with defaults
+        max_results = request.args.get("max_results", default=10, type=int)
+
+        # Get Gmail service with error handling
+        try:
+            service = get_gmail_service()
+            print("Successfully authenticated with Gmail API")
+        except Exception as auth_error:
+            print(f"Authentication error: {str(auth_error)}")
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": f"Gmail API authentication failed: {str(auth_error)}",
+                        "error_type": "authentication",
+                    }
+                ),
+                403,
+            )
+
+        # Get categories and their label IDs
+        try:
+            categories = get_categories_from_prompt()
+            print(f"Found categories: {categories}")
+
+            # Get all labels
+            labels_response = service.users().labels().list(userId="me").execute()
+            all_labels = labels_response.get("labels", [])
+            print(f"Found {len(all_labels)} labels in Gmail")
+
+            # Find label IDs that match our categories
+            category_label_ids = []
+            for category in categories:
+                for label in all_labels:
+                    if category.lower() == label["name"].lower():
+                        category_label_ids.append(label["id"])
+                        print(
+                            f"Matched category '{category}' to label ID: {label['id']}"
+                        )
+        except Exception as category_error:
+            print(f"Error getting categories or labels: {str(category_error)}")
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": f"Failed to get categories or labels: {str(category_error)}",
+                        "error_type": "categories_labels",
+                    }
+                ),
+                500,
+            )
+
+        # Fetch emails that don't have our classification labels
+        try:
+            messages = fetch_primary_emails(
+                service,
+                max_results=max_results,
+                label_ids_to_exclude=category_label_ids,
+            )
+            print(f"Fetched {len(messages)} primary emails")
+        except Exception as fetch_error:
+            print(f"Error fetching emails: {str(fetch_error)}")
+            print(traceback.format_exc())
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": f"Failed to fetch emails: {str(fetch_error)}",
+                        "error_type": "fetch_emails",
+                    }
+                ),
+                500,
+            )
+
+        # Process messages to return
+        email_data = []
+        for msg in messages:
+            try:
+                msg_id = msg["id"]
+
+                # Get full message details
+                msg_data = (
+                    service.users().messages().get(userId="me", id=msg_id).execute()
+                )
+
+                # Extract email details
+                headers = msg_data.get("payload", {}).get("headers", [])
+                subject = next(
+                    (h["value"] for h in headers if h["name"].lower() == "subject"),
+                    "(No Subject)",
+                )
+                sender = next(
+                    (h["value"] for h in headers if h["name"].lower() == "from"),
+                    "(No Sender)",
+                )
+                date = next(
+                    (h["value"] for h in headers if h["name"].lower() == "date"), ""
+                )
+                snippet = msg_data.get("snippet", "")
+
+                email_data.append(
+                    {
+                        "id": msg_id,
+                        "subject": subject,
+                        "from": sender,
+                        "date": date,
+                        "snippet": snippet,
+                    }
+                )
+            except Exception as process_error:
+                print(
+                    f"Error processing message {msg.get('id', 'unknown')}: {str(process_error)}"
+                )
+                # Continue processing other messages
+
+        return jsonify(
+            {"status": "success", "count": len(email_data), "emails": email_data}
+        )
+
+    except Exception as e:
+        print(f"Unexpected error in API: {str(e)}")
+        print(traceback.format_exc())
+        return (
+            jsonify({"status": "error", "message": str(e), "error_type": "general"}),
+            500,
+        )
+
+
+@app.route("/api/emails/classify", methods=["POST"])
+def classify_email_api():
+    """API endpoint to classify an email and apply a label"""
+    try:
+        data = request.json
+        if not data or "email_id" not in data:
+            return (
+                jsonify({"status": "error", "message": "Missing email_id in request"}),
+                400,
+            )
+
+        email_id = data["email_id"]
+
+        # Get Gmail service
+        service = get_gmail_service()
+
+        # Get email details
+        msg_data = service.users().messages().get(userId="me", id=email_id).execute()
+
+        # Extract subject and snippet
+        headers = msg_data.get("payload", {}).get("headers", [])
+        subject = next(
+            (h["value"] for h in headers if h["name"].lower() == "subject"),
+            "(No Subject)",
+        )
+        snippet = msg_data.get("snippet", "")
+
+        # Classify the email
+        category = classify_email(subject, snippet)
+
+        # Apply the label
+        label_id = get_or_create_label(service, category)
+        service.users().messages().modify(
+            userId="me", id=email_id, body={"addLabelIds": [label_id]}
+        ).execute()
+
+        return jsonify(
+            {"status": "success", "email_id": email_id, "category": category}
+        )
+
+    except Exception as e:
+        print(f"Error in API: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host="0.0.0.0", port=port, debug=True)

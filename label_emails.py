@@ -26,21 +26,71 @@ def label_email(service, msg_id, label_name):
     ).execute()
 
 
-def fetch_primary_emails(service, max_results=10):
-    """Fetch messages from the Primary inbox category."""
-    results = (
-        service.users()
-        .messages()
-        .list(
-            userId="me",
-            labelIds=["CATEGORY_PERSONAL"],
-            maxResults=max_results,
-            q="category:primary",
+def fetch_primary_emails(service, max_results=10, label_ids_to_exclude=None):
+    """
+    Fetch messages from the Primary inbox category that don't have specified labels.
+    Continues fetching in batches until it finds enough unlabeled emails or runs out of emails.
+    """
+    unlabeled_messages = []
+    page_token = None
+    batch_size = 100  # Fetch in larger batches for efficiency
+
+    while len(unlabeled_messages) < max_results:
+        # Fetch a batch of messages - explicitly query for primary category
+        # and sort by newest first
+        results = (
+            service.users()
+            .messages()
+            .list(
+                userId="me",
+                q="category:primary -category:promotions -category:social -category:updates -category:forums",
+                maxResults=batch_size,
+                pageToken=page_token,
+                # Ensure we're getting the newest emails first
+                includeSpamTrash=False,
+            )
+            .execute()
         )
-        .execute()
-    )
-    messages = results.get("messages", [])
-    return messages
+
+        messages = results.get("messages", [])
+        if not messages:
+            break  # No more messages to fetch
+
+        print(f"Fetched batch of {len(messages)} primary category messages")
+
+        # Process each message in the batch
+        for msg in messages:
+            # Check if we already have enough messages
+            if len(unlabeled_messages) >= max_results:
+                break
+
+            msg_id = msg["id"]
+
+            # Get message details to check labels
+            if label_ids_to_exclude:
+                msg_data = (
+                    service.users()
+                    .messages()
+                    .get(userId="me", id=msg_id, format="minimal")
+                    .execute()
+                )
+
+                # Skip if message has any of the excluded labels
+                if any(
+                    label_id in msg_data.get("labelIds", [])
+                    for label_id in label_ids_to_exclude
+                ):
+                    continue
+
+            # If we get here, the message doesn't have any of the excluded labels
+            unlabeled_messages.append(msg)
+
+        # Check if there are more pages of results
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            break  # No more pages
+
+    return unlabeled_messages
 
 
 def main():
@@ -61,19 +111,41 @@ def main():
         name: get_or_create_label(service, name) for name in classification_labels
     }
 
-    messages = fetch_primary_emails(service, max_results=50)
+    # Number of emails to process in one run
+    emails_to_process = 10  # Increased to process more emails
+
+    # Fetch emails that don't have our classification labels
+    messages = fetch_primary_emails(
+        service,
+        max_results=emails_to_process,
+        label_ids_to_exclude=list(label_names_to_ids.values()),
+    )
+
+    print(f"Found {len(messages)} unlabeled emails to process")
+
+    # Debug: Print the dates of the messages we're processing
+    if messages:
+        print("Processing emails with the following details:")
+        for i, msg in enumerate(messages):
+            msg_data = (
+                service.users().messages().get(userId="me", id=msg["id"]).execute()
+            )
+            headers = msg_data.get("payload", {}).get("headers", [])
+            date = next(
+                (h["value"] for h in headers if h["name"].lower() == "date"),
+                "Unknown date",
+            )
+            subject = next(
+                (h["value"] for h in headers if h["name"].lower() == "subject"),
+                "No subject",
+            )
+            print(f"  {i+1}. Date: {date} | Subject: {subject}")
 
     for msg in messages:
         msg_id = msg["id"]
 
         # Get full message details
         msg_data = service.users().messages().get(userId="me", id=msg_id).execute()
-        existing_labels = msg_data.get("labelIds", [])
-
-        # Skip if message already has a classification label
-        if any(label_id in existing_labels for label_id in label_names_to_ids.values()):
-            print(f"Skipping message {msg_id}: already labeled.")
-            continue
 
         # Extract subject and snippet
         subject = ""
