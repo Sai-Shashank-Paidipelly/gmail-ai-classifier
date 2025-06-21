@@ -3,7 +3,6 @@ import ssl
 import email
 import re
 from dotenv import load_dotenv
-from imapclient import IMAPClient
 import openai
 import traceback
 from jinja2 import Template
@@ -38,54 +37,58 @@ def get_categories_from_prompt():
         return []
 
 
+# Fetch emails using Gmail API
 def fetch_emails(max_emails=15):
     try:
         service = get_gmail_service()
+        print(f"Connected to Gmail API for {EMAIL}")
 
-        # Get categories dynamically from the prompt file
-        categories = get_categories_from_prompt()
-        print(f"Looking for emails not categorized with: {categories}")
-
-        # First, get all available labels to see their actual IDs
+        # Get all user-created labels
         labels_response = service.users().labels().list(userId="me").execute()
         all_labels = labels_response.get("labels", [])
 
-        # Print all labels for debugging
-        print("Available labels in Gmail:")
-        for label in all_labels:
-            print(f"  - {label['name']} (ID: {label['id']})")
+        # Get our categories from the prompt file
+        categories = get_categories_from_prompt()
+        print(f"Looking for emails not categorized with: {categories}")
 
-        # Map our category names to actual label IDs
+        # Find label IDs that match our categories
         category_label_ids = []
-        for category in categories:
-            for label in all_labels:
-                if category.lower() == label["name"].lower():
-                    category_label_ids.append(label["id"])
+        for label in all_labels:
+            if any(
+                category.lower() == label["name"].lower() for category in categories
+            ):
+                category_label_ids.append(label["id"])
+                print(f"Found label: {label['name']} (ID: {label['id']})")
 
-        print(f"Category label IDs to exclude: {category_label_ids}")
-
-        # Fetch messages from the Primary category
+        # Build a query that excludes messages with our category labels
+        # We'll get all messages and filter them manually since Gmail API query
+        # doesn't support complex label exclusions reliably
         response = (
             service.users()
             .messages()
             .list(
                 userId="me",
-                q="category:primary",
-                maxResults=max_emails * 2,  # Fetch more to account for filtering
+                maxResults=max_emails * 3,  # Get more messages to account for filtering
             )
             .execute()
         )
 
         messages = response.get("messages", [])
-        print(f"Found {len(messages)} messages in primary category")
+        if not messages:
+            print("No messages found.")
+            return []
+
+        print(f"Found {len(messages)} messages, filtering for uncategorized ones...")
+
         email_data = []
-        skipped_count = 0
+        processed = 0
 
         for message in messages:
             if len(email_data) >= max_emails:
                 break
 
             msg_id = message["id"]
+            processed += 1
 
             # Get full message details
             msg = (
@@ -95,16 +98,14 @@ def fetch_emails(max_emails=15):
                 .execute()
             )
 
-            # Check if the email has any of our category labels
+            # Check if this email has any of our category labels
             msg_labels = msg.get("labelIds", [])
-            print(f"Email ID {msg_id} has labels: {msg_labels}")
 
             # Skip if the email has any of our category labels
             if any(label_id in msg_labels for label_id in category_label_ids):
-                print(f"Skipping email with ID {msg_id} - already categorized")
-                skipped_count += 1
                 continue
 
+            # Extract email details
             headers = msg["payload"]["headers"]
             subject = next(
                 (h["value"] for h in headers if h["name"].lower() == "subject"),
@@ -117,22 +118,17 @@ def fetch_emails(max_emails=15):
             snippet = msg.get("snippet", "")
 
             email_data.append(
-                {
-                    "id": msg_id,
-                    "subject": subject,
-                    "from": sender,
-                    "snippet": snippet,
-                }
+                {"id": msg_id, "subject": subject, "from": sender, "snippet": snippet}
             )
 
         print(
-            f"Processed {len(email_data)} emails, skipped {skipped_count} already categorized emails"
+            f"Processed {processed} messages, found {len(email_data)} uncategorized emails"
         )
         return email_data
 
     except Exception as e:
-        print(f"[ERROR] Failed to fetch emails via Gmail API: {e}")
-        traceback.print_exc()  # Print full traceback for debugging
+        print(f"Error in fetch_emails: {str(e)}")
+        print(traceback.format_exc())
         return []
 
 
