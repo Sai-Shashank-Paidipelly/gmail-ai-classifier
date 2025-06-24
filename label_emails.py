@@ -28,25 +28,23 @@ def label_email(service, msg_id, label_name):
 
 def fetch_primary_emails(service, max_results=10, label_ids_to_exclude=None):
     """
-    Fetch messages from the Primary inbox category that don't have specified labels.
-    Continues fetching in batches until it finds enough unlabeled emails or runs out of emails.
+    Fetch and return the most recent messages from the Primary inbox category that don't
+    already have the specified labels. Messages are sorted by internalDate (newest first).
     """
-    unlabeled_messages = []
+    all_valid_messages = []
     page_token = None
-    batch_size = 100  # Fetch in larger batches for efficiency
+    batch_size = 100  # Gmail's max allowed batch size
 
-    while len(unlabeled_messages) < max_results:
-        # Fetch a batch of messages - explicitly query for primary category
-        # and sort by newest first
+    while len(all_valid_messages) < max_results:
+        # Query to focus only on Primary inbox (filtering out other tabs)
         results = (
             service.users()
             .messages()
             .list(
                 userId="me",
-                q="category:primary -category:promotions -category:social -category:updates -category:forums",
+                q="category:primary",
                 maxResults=batch_size,
                 pageToken=page_token,
-                # Ensure we're getting the newest emails first
                 includeSpamTrash=False,
             )
             .execute()
@@ -54,43 +52,35 @@ def fetch_primary_emails(service, max_results=10, label_ids_to_exclude=None):
 
         messages = results.get("messages", [])
         if not messages:
-            break  # No more messages to fetch
+            break  # No more messages
 
-        print(f"Fetched batch of {len(messages)} primary category messages")
-
-        # Process each message in the batch
         for msg in messages:
-            # Check if we already have enough messages
-            if len(unlabeled_messages) >= max_results:
-                break
+            if len(all_valid_messages) >= max_results * 2:
+                break  # Collect more than needed to sort & slice later
 
             msg_id = msg["id"]
+            msg_data = service.users().messages().get(userId="me", id=msg_id).execute()
 
-            # Get message details to check labels
+            # Skip if message has excluded labels
             if label_ids_to_exclude:
-                msg_data = (
-                    service.users()
-                    .messages()
-                    .get(userId="me", id=msg_id, format="minimal")
-                    .execute()
-                )
-
-                # Skip if message has any of the excluded labels
                 if any(
                     label_id in msg_data.get("labelIds", [])
                     for label_id in label_ids_to_exclude
                 ):
                     continue
 
-            # If we get here, the message doesn't have any of the excluded labels
-            unlabeled_messages.append(msg)
+            all_valid_messages.append(msg_data)
 
-        # Check if there are more pages of results
         page_token = results.get("nextPageToken")
         if not page_token:
-            break  # No more pages
+            break
 
-    return unlabeled_messages
+    # Sort collected messages by internalDate (newest first)
+    sorted_msgs = sorted(
+        all_valid_messages, key=lambda m: int(m["internalDate"]), reverse=True
+    )
+
+    return sorted_msgs[:max_results]
 
 
 def main():
