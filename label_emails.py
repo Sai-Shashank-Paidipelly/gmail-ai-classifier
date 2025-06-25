@@ -83,8 +83,67 @@ def fetch_primary_emails(service, max_results=10, label_ids_to_exclude=None):
     return sorted_msgs[:max_results]
 
 
+def delete_emails_with_label(service, label_name="Promotions", max_to_delete=10):
+    """
+    Deletes emails that have a custom label (e.g., 'Promotions') applied.
+    """
+    # Step 1: Get label ID
+    labels = service.users().labels().list(userId="me").execute().get("labels", [])
+    label_id = None
+    for label in labels:
+        if label["name"].lower() == label_name.lower():
+            label_id = label["id"]
+            break
+
+    if not label_id:
+        print(f"Label '{label_name}' not found.")
+        return
+
+    deleted_count = 0
+    page_token = None
+
+    while deleted_count < max_to_delete:
+        # Step 2: Find messages with the custom label
+        results = (
+            service.users()
+            .messages()
+            .list(
+                userId="me",
+                labelIds=[label_id],
+                maxResults=100,
+                pageToken=page_token,
+                includeSpamTrash=False,
+            )
+            .execute()
+        )
+
+        messages = results.get("messages", [])
+        if not messages:
+            print("No more messages with label found.")
+            break
+
+        for msg in messages:
+            if deleted_count >= max_to_delete:
+                break
+
+            msg_id = msg["id"]
+            try:
+                service.users().messages().trash(userId="me", id=msg_id).execute()
+                print(f"Deleted message with ID: {label_name}")
+                deleted_count += 1
+            except Exception as e:
+                print(f"Error deleting message {msg_id}: {e}")
+
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            break
+
+    print(f"Total messages deleted with label '{label_name}': {deleted_count}")
+
+
 def main():
     service = get_gmail_service()
+    delete_emails_with_label(service, label_name="Promotions", max_to_delete=10)
 
     classification_labels = [
         "Sports",
