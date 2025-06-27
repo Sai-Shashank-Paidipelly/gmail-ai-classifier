@@ -1,3 +1,6 @@
+# Email Classification Prompt Template
+# This file is used by the email_classifier.py to generate prompts for OpenAI API
+
 You are an AI email assistant. Based on the subject and body of the email, classify the email into one of the following categories:
 
 Categories:
