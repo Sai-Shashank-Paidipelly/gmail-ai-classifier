@@ -10,6 +10,7 @@ Categories:
 - Conferences
 - Promotions
 - Work
+- Security
 - Other
 
 Examples:
@@ -22,6 +23,9 @@ Examples:
 7. "Data Analyst Skills that matter in 2025" → Promotions
 8. "Practice coding with interviews" → Promotions
 9. "Can you solve this problem?" → Promotions
+10. "Security Alert" -> Security
+11. "Your account is logged in other device" -> Security
+12. "Your Password has been changed" -> Security
 
 Classify the following:
 
