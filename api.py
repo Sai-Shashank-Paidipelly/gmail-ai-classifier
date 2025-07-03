@@ -7,9 +7,14 @@ from label_emails import fetch_primary_emails, get_or_create_label
 from email_classifier import get_categories_from_prompt
 from dotenv import load_dotenv
 import traceback
+from utils.feedback_db import init_db, store_feedback, get_feedback_stats
+from utils.prompt_updater import update_prompt_from_feedback
 
 # Load environment variables
 load_dotenv()
+
+# Initialize the feedback database
+init_db()
 
 app = Flask(__name__)
 CORS(app)
@@ -318,6 +323,139 @@ def classify_email_api():
         print(f"Error in API: {str(e)}")
         print(traceback.format_exc())
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/feedback", methods=["POST"])
+def submit_feedback():
+    """Endpoint to submit feedback about email classification"""
+    try:
+        data = request.json
+        if (
+            not data
+            or "message_id" not in data
+            or "ai_category" not in data
+            or "user_category" not in data
+        ):
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Missing required fields: message_id, ai_category, user_category",
+                    }
+                ),
+                400,
+            )
+
+        # Get email details if not provided
+        subject = data.get("subject", "")
+        snippet = data.get("snippet", "")
+
+        if not subject or not snippet:
+            try:
+                service = get_gmail_service()
+                msg_data = (
+                    service.users()
+                    .messages()
+                    .get(userId="me", id=data["message_id"])
+                    .execute()
+                )
+
+                headers = msg_data.get("payload", {}).get("headers", [])
+                subject = next(
+                    (h["value"] for h in headers if h["name"].lower() == "subject"),
+                    "(No Subject)",
+                )
+                snippet = msg_data.get("snippet", "")
+            except Exception as e:
+                print(f"Error fetching email details: {e}")
+                # Continue with empty subject/snippet if we can't fetch them
+
+        # Store the feedback
+        success = store_feedback(
+            message_id=data["message_id"],
+            subject=subject,
+            snippet=snippet,
+            ai_category=data["ai_category"],
+            user_category=data["user_category"],
+        )
+
+        if not success:
+            return jsonify({"success": False, "error": "Failed to store feedback"}), 500
+
+        # If AI was wrong and user corrected it, apply the correct label
+        if data["ai_category"] != data["user_category"]:
+            try:
+                service = get_gmail_service()
+                label_id = get_or_create_label(service, data["user_category"])
+
+                # Remove AI's label if it exists
+                ai_label_id = None
+                labels = (
+                    service.users()
+                    .labels()
+                    .list(userId="me")
+                    .execute()
+                    .get("labels", [])
+                )
+                for label in labels:
+                    if label["name"].lower() == data["ai_category"].lower():
+                        ai_label_id = label["id"]
+                        break
+
+                modify_request = {}
+                if label_id:
+                    modify_request["addLabelIds"] = [label_id]
+                if ai_label_id:
+                    modify_request["removeLabelIds"] = [ai_label_id]
+
+                if modify_request:
+                    service.users().messages().modify(
+                        userId="me", id=data["message_id"], body=modify_request
+                    ).execute()
+            except Exception as e:
+                print(f"Error updating labels: {e}")
+                # Continue even if label update fails
+
+        return jsonify({"success": True, "message": "Feedback recorded successfully"})
+    except Exception as e:
+        print(f"Error in feedback submission: {e}")
+        print(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/feedback/stats", methods=["GET"])
+def get_stats():
+    """Get statistics about classification feedback"""
+    try:
+        stats = get_feedback_stats()
+        return jsonify({"success": True, "stats": stats})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/prompt/update", methods=["POST"])
+def trigger_prompt_update():
+    """Manually trigger a prompt update based on feedback"""
+    try:
+        data = request.json
+        min_feedback = data.get("min_feedback", 20) if data else 20
+
+        success = update_prompt_from_feedback(min_feedback_count=min_feedback)
+
+        if success:
+            return jsonify({"success": True, "message": "Prompt updated successfully"})
+        else:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "message": "Not enough feedback or update failed",
+                    }
+                ),
+                400,
+            )
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 if __name__ == "__main__":
