@@ -2,6 +2,10 @@ import streamlit as st
 import pandas as pd
 from email_classifier import fetch_emails, classify_email
 from utils.excel_conversion import convert_csv_to_excel
+from utils.feedback_db import init_db, store_feedback
+
+# Initialize the feedback database
+init_db()
 
 st.set_page_config(page_title="📧 AI Email Classifier", layout="wide")
 st.title("📧 AI Email Classifier with Manual Override")
@@ -15,6 +19,7 @@ for i, mail in enumerate(emails):
     subject = mail["subject"]
     sender = mail["from"]
     snippet = mail["snippet"]
+    message_id = mail.get("id", f"local_{i}")  # Use message ID if available
     ai_label = classify_email(subject, snippet)
 
     category_options = [
@@ -44,6 +49,21 @@ for i, mail in enumerate(emails):
             key=f"user_label_{i}",
         )
 
+        # Store feedback if user changed the classification
+        if user_label != ai_label:
+            st.info(
+                f"You changed the classification from '{ai_label}' to '{user_label}'"
+            )
+
+            # Store feedback in database
+            store_feedback(
+                message_id=message_id,
+                subject=subject,
+                snippet=snippet,
+                ai_category=ai_label,
+                user_category=user_label,
+            )
+
         feedback_data.append(
             {
                 "Subject": subject,
@@ -68,3 +88,12 @@ if st.button("Save Feedback to CSV"):
             file_name="email_classification_log_cleaned.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+# Link to feedback dashboard
+st.sidebar.markdown("---")
+st.sidebar.header("📊 Analytics")
+if st.sidebar.button("Open Feedback Dashboard"):
+    st.sidebar.info("Running feedback_dashboard.py...")
+    import subprocess
+
+    subprocess.Popen(["streamlit", "run", "feedback_dashboard.py"])
