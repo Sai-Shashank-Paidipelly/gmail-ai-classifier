@@ -1,7 +1,7 @@
 import logging
 import time
 from gmail_service import get_gmail_service
-from email_classifier import classify_email
+from email_classifier import classify_email, get_token_usage
 
 # Configure logging
 logging.basicConfig(
@@ -315,8 +315,15 @@ def main():
 
     # Log completion
     elapsed_time = time.time() - start_time
+
+    # Get token usage statistics
+    token_usage = get_token_usage()
+
     logger.info(
         f"=== Email labeling process completed in {elapsed_time:.2f} seconds ==="
+    )
+    logger.info(
+        f"=== Token Usage: Prompt: {token_usage['prompt_tokens']}, Completion: {token_usage['completion_tokens']}, Total: {token_usage['total_tokens']} ==="
     )
 
 
