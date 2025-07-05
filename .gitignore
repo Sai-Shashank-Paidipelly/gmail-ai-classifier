@@ -19,6 +19,7 @@ Credentials.json
 token.pickle
 *.json
 !requirements.txt
+work_flow.txt
 
 # IDE files
 .vscode/
